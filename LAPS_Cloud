@@ -1,0 +1,105 @@
+<#
+.SYNOPSIS
+Retrieve the Windows Local Admin Password from the Azure Keyvault RSGLAPS.
+
+.DESCRIPTION
+This function connects to Azure to retrieve the keyvault secret for a given Windows machine.
+
+The function relies on the Az module and requires a user to have read-access to the Azure keyvault.
+
+To run this in a Linux environment install Powershell 7 for Linux (https://docs.microsoft.com/en-us/powershell/scripting/install/installing-powershell-core-on-linux?view=powershell-7)
+
+.PARAMETER MachineName
+Value of a Windows machine name
+
+.EXAMPLE
+Get-WindowsLAP -MachineName RIS-123abc or RSG-123abc
+#>
+
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+function Get-WindowsLAP {
+
+    ## Define default paramters
+    param(
+        [Parameter(Mandatory)]
+        [string]$MachineName
+    )
+
+    $AzSubscription = "1402bace-77be-4960-8d92-ffa0a3acfa16"
+    #$AzTenantID = "72f988bf-86f1-41af-91ab-2d7cd011db47"
+    $AzKeyVaultName = "RSGLAPS"
+    $WarningAction = 'SilentlyContinue'
+
+    ## Check Azure Module exists
+    if (Get-Module -ListAvailable -Name Az.Keyvault) {
+        $ModuleInstalled = $true
+    }
+
+    ## Install Azure Module
+    else {
+        Write-Host "Please wait while the Azure module installs..." -BackgroundColor Yellow -ForegroundColor Black
+        Install-Module -Scope CurrentUser -Name Az -AllowClobber -Force
+        $ModuleInstalled = $true
+    }
+
+    ## Connect to Azure
+    if ($ModuleInstalled = $true) {
+        Connect-AzAccount -Subscription $AzSubscription -WarningAction $WarningAction
+    }
+    else {
+        Write-Host "The Azure module failed to install. Please run the command 'Install-Module -Name Az -AllowClobber'"
+        Exit
+    }
+
+    ## Checking for key
+    Write-Host "Checking for Local Admin Password $MachineName..."
+    $SecretKey = Get-AzKeyVaultSecret -VaultName $AzKeyVaultName -Name $MachineName
+    $ssPtr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecretKey.SecretValue)
+    try {
+        $secretValueText = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($ssPtr)
+    }
+    finally {
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ssPtr)
+    }
+
+    $SecretKeyVersions = (Get-AzKeyVaultSecret -VaultName $AzKeyVaultName -Name $MachineName -IncludeVersions | Sort-Object -Property Created | Select-Object -Last 5)
+
+    $secretValueText | Set-Clipboard
+    Write-Host "Current Local Admin Password: $SecretvalueText" -ForegroundColor "Yellow"
+
+    if ($SecretKey) {
+        if ($SecretKeyVersions.count -eq 1) {
+            Write-Host "There are no previous Local Admin Passwords"
+        }
+        else {
+            Write-Host "Displaying"$SecretKeyVersions.count"previous Local Admin Passwords"
+        }
+
+        # display the last 5 secrets
+        foreach ($SecretKeyVersion in $SecretKeyVersions) {
+            #write-host $SecretKeyVersion.version
+            $SecretKey = Get-AzKeyVaultSecret -VaultName $AzKeyVaultName -Name $MachineName -Version $SecretKeyVersion.Version
+            $ssPtr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecretKey.SecretValue)
+            try {
+                $secretValueText = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($ssPtr)
+                Write-Host "Previous password: " -NoNewline
+                Write-Host $secretValueText -NoNewline -ForegroundColor "Cyan"
+                Write-Host " set at " -NoNewline
+                Write-Host $SecretKeyVersion.created
+            }
+            finally {
+                [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ssPtr)
+            }
+        }
+    }
+
+    else {
+        Clear-Host
+        Write-Host "Unable to find a Local Admin Password for $MachineName" -BackgroundColor "Red"
+    }
+    # Confirm to disconnect from Azure
+    #$null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+    Disconnect-AzAccount | Out-Null
+    Write-Host 'Azure session has been disconnected' -BackgroundColor Yellow -ForegroundColor Black
+}
+Get-WindowsLAP
